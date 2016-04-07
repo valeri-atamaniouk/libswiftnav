@@ -25,5 +25,6 @@ Suite* track_test_suite(void);
 Suite* cnav_test_suite(void);
 Suite* correlator_suite(void);
 Suite* counter_checker_suite(void);
+Suite* cn0_suite(void);
 
 #endif /* CHECK_SUITES_H */
