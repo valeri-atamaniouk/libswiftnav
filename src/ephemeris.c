@@ -763,7 +763,23 @@ void decode_ephemeris(u32 frame_words[3][8], ephemeris_t *e)
     log_warn_sid(e->sid, "Latest ephemeris had IODC/IODE mismatch. Ignoring ephemeris.");
   }
 }
+#if 0
+/** Decode ephemeris from L1 GLO navigation message frames.
+ *
+ * \note This function does not check for parity errors. You should check the
+ *       subframes for parity errors before calling this function.
+ *
+ * References:
+ *   TODO -# IS-GPS-200D, Section 20.3.2 and Figure 20-1
+ *
+ * \param string Array containing 85 bits strings 1 through 3 of any GLO frames
+ * \param e Pointer to an ephemeris struct to fill in.
+ */
+void decode_glo_ephemeris(u32 strigs[3][4], ephemeris_t *e)
+{
 
+}
+#endif
 static bool ephemeris_xyz_equal(const ephemeris_xyz_t *a,
                                 const ephemeris_xyz_t *b)
 {
