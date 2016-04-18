@@ -14,6 +14,7 @@
 #define LIBSWIFTNAV_NAV_MSG_GLO_H
 
 #include <libswiftnav/common.h>
+#include <libswiftnav/ephemeris.h>
 
 #define NAV_MSG_GLO_STRING_BITS_LEN 3 /* Buffer 96 nav bits. */
 
@@ -23,6 +24,7 @@ typedef struct {
 } nav_msg_glo_t;
 
 void nav_msg_init_glo(nav_msg_glo_t *n);
-u32 extract_word_glo(nav_msg_glo_t *n, u16 bit_index, u8 n_bits); //TODO: this will be static so remove after test
+s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e);
+u32 extract_word_glo(const nav_msg_glo_t *n, u16 bit_index, u8 n_bits); //TODO: remove after tests
 
 #endif /* LIBSWIFTNAV_NAV_MSG_GLO_H */

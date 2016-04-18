@@ -9,14 +9,56 @@
  * EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
  */
+#define DEBUG 1
 
 #include <stdio.h>
 #include <check.h>
 #include <math.h>
 #include <libswiftnav/nav_msg_glo.h>
+#include <libswiftnav/logging.h>
 
 nav_msg_glo_t n;
+ephemeris_t e;
+/*This input strings were taken from collected data,
+ * refer to libswiftnav/tests/data/gloframesstream/raw_glo_frame_ascii.log
+ * #GLORAWFRAMEA,USB1,0,73.0,SATTIME,1892,300827.000,00000000,8792,13498;
+ * 3,55,4,1892,300827.077,52,52,15,
+ * 01074396999b05c3a850b5,0,021760a5256204d9c15f66,0,0380269d60899a6d0e3123,0,
+ * 04865d1cc0000000344918,0,050d100000000340000895,0,06ab81d85b1019f107b83c,0,
+ * 0705d3179ea697fc554079,0,082c00148c06153f8e133e,0,0972222bcd4e97ff14be12,0,
+ * 0aad8090a54019cb035d3f,0,0b3e2240201e97fc34fc39,0,0cae940cdc3c1e2786da9b,0,
+ * 0d68bf54a4c697f115320b,0,0eaf8449b38c1e228932d8,0,0f815b653eee981314802a,0*f3837a1c
+*/
+u32 strings_in[5][3] = {
+  {0xc3a850b5, 0x96999b05, 0x010743}, /* 01074396999b05c3a850b5 */
+  {0xd9c15f66, 0xa5256204, 0x021760}, /* 021760a5256204d9c15f66 */
+  {0x6d0e3123, 0x9d60899a, 0x038026}, /* 0380269d60899a6d0e3123 */
+  {0x00344918, 0x1cc00000, 0x04865d}, /* 04865d1cc0000000344918 */
+  {0x40000895, 0x3, 0x050d10 }        /* 050d100000000340000895 */
+};
 
+/* RAW strings above correspond to following data from same file:
+ * #GLOEPHEMERISA,USB1,0,73.5,SATTIME,1892,300617.000,00000000,8d29,13498;
+ * 55,4,1,4,1892,301517000,10783,104,0,0,59,0,
+ * -1.4453039062500000e+07,-6.9681713867187500e+06,1.9873773925781250e+07, <-- X, Y, Z
+ * -1.4125013351440430e+03,-2.3216266632080078e+03,-1.8360681533813477e+03, <-- Vx, Vy, Vz
+ * 0.00000000000000000,0.00000000000000000,-2.79396772384643555e-06, <-- Ax, Ay, Az
+ * -9.71024855971336365e-05, <-- tau
+ * 5.587935448e-09,
+ * 1.81898940354585648e-12, <-- gamma
+ * 52200,3,0,0,13*955c64e9 
+ */
+double X = -1.4453039062500000e+07;
+double Y = -6.9681713867187500e+06;
+double Z =  1.9873773925781250e+07;
+double VX = -1.4125013351440430e+03;
+double VY = -2.3216266632080078e+03;
+double VZ = -1.8360681533813477e+03;
+double AX = 0;
+double AY = 0;
+double AZ = -2.79396772384643555e-06;
+double GAMMA = 1.81898940354585648e-12;
+double TAU = -9.71024855971336365e-05;
 
 START_TEST(test_extract_glo_word)
 {
@@ -56,113 +98,39 @@ START_TEST(test_extract_glo_word)
 }
 END_TEST
 
-START_TEST(test_extract_real_glo_word)
+START_TEST(test_process_string_glo)
 {
-  u32 ret = 0;
-  u8 sign = 0;
-  double f_ret;
   nav_msg_init_glo(&n);
-  //parse string 1
-  n.string_bits[0] = 0xc3a850b5;
-  n.string_bits[1] = 0x96999b05;
-  n.string_bits[2] = 0x010743;
-  ret = extract_word_glo(&n,85,1);
-  fail_unless(ret == 0, "1. %x, expected %x", ret, 0);
-  ret = extract_word_glo(&n,81,4);
-  fail_unless(ret == 1, "2. %x, expected %x", ret, 1);
-  printf("STRING %u\n",ret);
-  ret = extract_word_glo(&n,9,26);
-  sign = extract_word_glo(&n,9+26,1);
-  f_ret = sign ? -1.0*ret*pow(2,-11)*1000.0 : ret*pow(2,-11)*1000.0;
-  printf("x = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,41,23);
-  sign = extract_word_glo(&n,41+23,1);
-  f_ret = sign ? -1.0*ret*pow(2,-20)*1000.0 : ret*pow(2,-20)*1000.0;
-  printf("Vx = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,36,4);
-  sign = extract_word_glo(&n,36+4,1);
-  f_ret = sign ? -1.0*ret*pow(2,-30)*1000.0 : ret*pow(2,-30)*1000.0;
-  printf("Ax = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,65,12);
-  printf("row Tk = %x\n",ret);
-  ret = extract_word_glo(&n,65,5);
-  printf("Tk(hours) = %u\n",ret);
-  ret = extract_word_glo(&n,70,6);
-  printf("Tk(mins) = %u\n",ret);
-  ret = extract_word_glo(&n,76,1);
-  printf("Tk(sec) = %u\n",ret);
-  //parse string 2
-  n.string_bits[0] = 0xd9c15f66;
-  n.string_bits[1] = 0xa5256204;
-  n.string_bits[2] = 0x021760;
-  ret = extract_word_glo(&n,85,1);
-  fail_unless(ret == 0, "1. %x, expected %x", ret, 0);
-  ret = extract_word_glo(&n,81,4);
-  fail_unless(ret == 2, "2. %x, expected %x", ret, 2);
-  printf("STRING %u\n",ret);
-  ret = extract_word_glo(&n,9,26);
-  sign = extract_word_glo(&n,9+26,1);
-  f_ret = sign ? -1.0*ret*pow(2,-11)*1000.0 : ret*pow(2,-11)*1000.0;
-  printf("y = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,41,23);
-  sign = extract_word_glo(&n,41+23,1);
-  f_ret = sign ? -1.0*ret*pow(2,-20)*1000.0 : ret*pow(2,-20)*1000.0;
-  printf("Vy = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,36,4);
-  sign = extract_word_glo(&n,36+4,1);
-  f_ret = sign ? -1.0*ret*pow(2,-30)*1000.0 : ret*pow(2,-30)*1000.0;
-  printf("Ay = %f(%x, %u)\n",f_ret,ret,sign);
-  //parse string 3
-  n.string_bits[0] = 0x6d0e3123;
-  n.string_bits[1] = 0x9d60899a;
-  n.string_bits[2] = 0x038026;
-  ret = extract_word_glo(&n,85,1);
-  fail_unless(ret == 0, "1. %x, expected %x", ret, 0);
-  ret = extract_word_glo(&n,81,4);
-  fail_unless(ret == 3, "2. %x, expected %x", ret, 3);
-  printf("STRING %u\n",ret);
-  ret = extract_word_glo(&n,9,26);
-  sign = extract_word_glo(&n,9+26,1);
-  f_ret = sign ? -1.0*ret*pow(2,-11)*1000.0 : ret*pow(2,-11)*1000.0;
-  printf("z = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,41,23);
-  sign = extract_word_glo(&n,41+23,1);
-  f_ret = sign ? -1.0*ret*pow(2,-20)*1000.0 : ret*pow(2,-20)*1000.0;
-  printf("Vz = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,36,4);
-  sign = extract_word_glo(&n,36+4,1);
-  f_ret = sign ? -1.0*ret*pow(2,-30)*1000.0 : ret*pow(2,-30)*1000.0;
-  printf("Az = %f(%x, %u)\n",f_ret,ret,sign);
-  ret = extract_word_glo(&n,66,2);
-  printf("P = %u\n",ret);
-  //parse string 4
-  n.string_bits[0] = 0x00344918;
-  n.string_bits[1] = 0x1cc00000;
-  n.string_bits[2] = 0x04865d;
-  ret = extract_word_glo(&n,85,1);
-  fail_unless(ret == 0, "1. %x, expected %x", ret, 0);
-  ret = extract_word_glo(&n,81,4);
-  fail_unless(ret == 4, "2. %x, expected %x", ret, 4);
-  printf("STRING %u\n",ret);
-  ret = extract_word_glo(&n,16,11);
-  printf("Nt = %u\n",ret);
-  //parse string 5
-  n.string_bits[0] = 0x40000895;
-  n.string_bits[1] = 0x3;
-  n.string_bits[2] = 0x050d10;
-  ret = extract_word_glo(&n,85,1);
-  fail_unless(ret == 0, "1. %x, expected %x", ret, 0);
-  ret = extract_word_glo(&n,81,4);
-  fail_unless(ret == 5, "2. %x, expected %x", ret, 5);
-  printf("STRING %u\n",ret);
-  ret = extract_word_glo(&n,38,32);
-  printf("Tau c = %u\n",ret);
-  ret = extract_word_glo(&n,32,5);
-  printf("N4 = %u\n",ret);
-  ret = extract_word_glo(&n,10,22);
-  printf("Tau GPS = %u\n",ret);
-  ret = extract_word_glo(&n,70,11);
-  printf("Na = %u\n",ret);
+  for(u8 i = 0; i < sizeof(strings_in)/sizeof(strings_in[0]); i++) {
+    memcpy(n.string_bits, strings_in[i], sizeof(n.string_bits));
+    process_string_glo(&n, &e);
+  }
+  log_debug("GLO Ephemeris:\n");
+  log_debug("\tSID: %u (code %u)\n", e.sid.sat, e.sid.code);
+  log_debug("\tGPS time: TOE %f, WN %d\n", e.toe.tow, e.toe.wn);
+  log_debug("\tURA: %f\n", e.ura);
+  log_debug("\tFit interval: %u\n", e.fit_interval);
+  log_debug("\tValid: %u\n", e.valid);
+  log_debug("\tHealthy: %u\n", e.healthy);
+  log_debug("\tgamma: %25.18f\n", e.glo.gamma);
+  log_debug("\ttau: %25.18f\n", e.glo.tau);
+  log_debug("\tX, Y, Z: %25.18f, %25.18f, %25.18f\n",
+             e.glo.pos[0], e.glo.pos[1], e.glo.pos[2]);
+  log_debug("\tVX, VY, VZ: %25.18f, %25.18f, %25.18f\n",
+             e.glo.vel[0], e.glo.vel[1], e.glo.vel[2]);
+  log_debug("\tAX, AY, AZ: %25.18f, %25.18f, %25.18f\n",
+             e.glo.acc[0], e.glo.acc[1], e.glo.acc[2]);
+  fail_unless(e.glo.pos[0]-X == 0, "dX %25.18f, expected %25.18f", e.glo.pos[0], X);
+  fail_unless(e.glo.pos[1]-Y == 0, "dY %25.18f, expected %25.18f", e.glo.pos[1], Y);
+  fail_unless(e.glo.pos[2]-Z == 0, "dZ %25.18f, expected %25.18f", e.glo.pos[2], Z);
+  fail_unless(e.glo.vel[0]-VX == 0, "dVX %25.18f, expected %25.18f", e.glo.vel[0], VX);
+  fail_unless(e.glo.vel[1]-VY == 0, "dVY %25.18f, expected %25.18f", e.glo.vel[1], VY);
+  fail_unless(e.glo.vel[2]-VZ == 0, "dVZ %25.18f, expected %25.18f", e.glo.vel[2], VZ);
+  fail_unless(e.glo.acc[0]-AX == 0, "dAX %25.18f, expected %25.18f", e.glo.acc[0], AX);
+  fail_unless(e.glo.acc[1]-AY == 0, "dAY %25.18f, expected %25.18f", e.glo.acc[1], AY);
+  fail_unless(e.glo.acc[2]-AZ == 0, "dAZ %25.18f, expected %25.18f", e.glo.acc[2], AZ);
+  fail_unless(e.glo.tau-TAU == 0, "dTAU %25.18f, expected %25.18f", e.glo.tau, TAU);
+  fail_unless(e.glo.gamma-GAMMA == 0, "dGAMMA %25.18f, expected %25.18f", e.glo.gamma, GAMMA);
 }
 END_TEST
 Suite* glo_decoder_test_suite(void)
@@ -170,7 +138,7 @@ Suite* glo_decoder_test_suite(void)
   Suite *s = suite_create("GLO decoder");
   TCase *tc_core = tcase_create("Core");
   tcase_add_test(tc_core, test_extract_glo_word);
-  tcase_add_test(tc_core, test_extract_real_glo_word);
+  tcase_add_test(tc_core, test_process_string_glo);
   suite_add_tcase(s, tc_core);
 
   return s;

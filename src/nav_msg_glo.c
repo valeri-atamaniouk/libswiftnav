@@ -12,24 +12,56 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <libswiftnav/nav_msg_glo.h>
+#include <libswiftnav/time.h>
+
+/* local containers for parsing GLO ephemeris*/
+static ephemeris_t g_e;
+static bool done_flag = false;
+static u16 nt;
+static u8 n4;
+static u8 hrs;
+static u8 min;
+static u8 sec;
+
+/* Word Ft (accuracy of measurements), refer to GLO ICD, Table 4.4 */
+const float f_t[] = {1.0f,
+                     2.0f,
+                     2.5f,
+                     4.0f,
+                     5.0f,
+                     7.0f,
+                     10.0f,
+                     12.0f,
+                     14.0f,
+                     16.0f,
+                     32.0f,
+                     64.0f,
+                     128.0f,
+                     256.0f,
+                     512.0f,
+                     -1.0f};
+
+/* Word P1 (Time interval between adjacent values of tb, minutes), refer Table 4.3 */
+const u8 p1[] = {0, 30, 45, 60}; /* min */
 
 void nav_msg_init_glo(nav_msg_glo_t *n)
 {
   /* Initialize the necessary parts of the nav message state structure. */
   memset(n, 0, sizeof(nav_msg_glo_t));
-  n->next_string_id = 1;
+  n->next_string_id = 1; /* start parsing from string 1 */
+  done_flag = false;
 }
 
 /** Extract a word of n_bits length (n_bits <= 32) at position bit_index into
- * the subframe. Takes account of the offset stored in n, and the circular
- * nature of the n->subframe_bits buffer.
- * Refer to bit index to Table 4.6 in GLO ICD 5.1 (pg. 34)
+ * the subframe. Refer to bit index to Table 4.6 and 4.11 in GLO ICD 5.1 (pg. 34)
  * \param n pointer to GLO nav message structure to be parsed
- * \param bit_index number of bit to the extract process start with. Range [1..85]
- * \param n_bits how many bits should be extract [1..32]
- * \return word extracted from navigation string */
-u32 extract_word_glo(nav_msg_glo_t *n, u16 bit_index, u8 n_bits)
+ * \param bit_index number of bit the extract process start with. Range [1..85]
+ * \param n_bits how many bits should be extracted [1..32]
+ * \return word extracted from navigation string
+ */
+/*static*/ u32 extract_word_glo(const nav_msg_glo_t *n, u16 bit_index, u8 n_bits)
 {
   assert(n_bits <= 32 && n_bits > 0);
   assert(bit_index <= 85 && bit_index > 0);
@@ -51,22 +83,138 @@ u32 extract_word_glo(nav_msg_glo_t *n, u16 bit_index, u8 n_bits)
 
   return word;
 }
-#if 0
-static s8 process_string_glo(nav_msg_t *n, ephemeris_t *e)
-{
-  /* Extract dummy bit from string */
-  /* sanity check dummy bit */
-  /* Extract string number */
 
-  /* Extract time stamp from a sting */
-  u32 ts = extract_word(n, 0, 30, 0);
-  if (nav_parity(&sf_word2)) {
-    log_info_sid(e->sid, "subframe parity mismatch (word 2)");
-    n->gps.subframe_start_index = 0;  // Mark the subframe as processed
-    n->gps.next_subframe_id = 1;      // Make sure we start again next time
-    return -2;
+/** The function deccodes a GLO navigation string
+ * \param n Pointer to nav_msg_glo_t structure which contains GLO string
+ * \param e Pointer to Ephemeris to store
+ * \return 0 - decode not completed,
+ *         1 -- decode completed, all ephemeris data stored
+ *         <0 -- in case of an error.
+ */
+s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
+{
+  /* Extract and check dummy bit from GLO string, bit 85 in GLO string */
+  if (extract_word_glo(n, 85, 1) != 0) {
+    log_error("GLO dummy bit is not 0.");
+    return -1;
+  } else {
+    /* Extract string number */
+    u8 m = extract_word_glo(n, 81, 4);
+    u32 ret;
+    u8 sign;
+    /* is the string we need? */
+    if (n->next_string_id == m) {
+      switch (m) {
+        case 1: /* string 1 */
+          /* extract x */
+          ret = extract_word_glo(n, 9, 26);
+          sign = extract_word_glo(n, 9 + 26, 1);
+          g_e.glo.pos[0] = sign ? -1.0 * ret * pow(2, -11) * 1000.0 :
+                                         ret * pow(2, -11) * 1000.0;
+          /* extract Vx */
+          ret = extract_word_glo(n, 41, 23);
+          sign = extract_word_glo(n, 41 + 23, 1);
+          g_e.glo.vel[0] = sign ? -1.0 * ret * pow(2, -20) * 1000.0 :
+                                         ret * pow(2, -20) * 1000.0;
+          /* extract Ax */
+          ret = extract_word_glo(n, 36, 4);
+          sign = extract_word_glo(n, 36 + 4, 1);
+          g_e.glo.acc[0] = sign ? -1.0 * ret * pow(2, -30) * 1000.0 :
+                                         ret * pow(2, -30) * 1000.0;
+          /* extract tk */
+          hrs = (u8)extract_word_glo(n,65,5);
+          min = (u8)extract_word_glo(n,70,6);
+          sec = (u8)extract_word_glo(n,76,1);
+
+          n->next_string_id = 2;
+          break;
+        case 2: /* string 2 */
+          /* extract y */
+          ret = extract_word_glo(n, 9, 26);
+          sign = extract_word_glo(n, 9 + 26, 1);
+          g_e.glo.pos[1] = sign ? -1.0 * ret * pow(2, -11) * 1000.0 :
+                                         ret * pow(2, -11) * 1000.0;
+          /* extract Vy */
+          ret = extract_word_glo(n, 41, 23);
+          sign = extract_word_glo(n, 41 + 23, 1);
+          g_e.glo.vel[1] = sign ? -1.0 * ret * pow(2, -20) * 1000.0 :
+                                         ret * pow(2, -20) * 1000.0;
+          /* extract Ay */
+          ret = extract_word_glo(n, 36, 4);
+          sign = extract_word_glo(n, 36 + 4, 1);
+          g_e.glo.acc[1] = sign ? -1.0 * ret * pow(2, -30) * 1000.0 :
+                                         ret * pow(2, -30) * 1000.0;
+          /* extract MSB of B */
+          g_e.healthy = extract_word_glo(n, 80, 1);
+          /* extract P1 */
+          g_e.fit_interval = p1[extract_word_glo(n, 77, 2)];
+
+          n->next_string_id = 3;
+          break;
+        case 3: /* string 3 */
+          /* extract z */
+          ret = extract_word_glo(n, 9, 26);
+          sign = extract_word_glo(n, 9 + 26, 1);
+          g_e.glo.pos[2] = sign ? -1.0 * ret * pow(2, -11) * 1000.0 :
+                                         ret * pow(2, -11) * 1000.0;
+          /* extract Vz */
+          ret = extract_word_glo(n, 41, 23);
+          sign = extract_word_glo(n, 41 + 23, 1);
+          g_e.glo.vel[2] = sign ? -1.0 * ret * pow(2, -20) * 1000.0 :
+                                         ret * pow(2, -20) * 1000.0;
+          /* extract Az */
+          ret = extract_word_glo(n, 36, 4);
+          sign = extract_word_glo(n, 36 + 4, 1);
+          g_e.glo.acc[2] = sign ? -1.0 * ret * pow(2, -30) * 1000.0 :
+                                         ret * pow(2, -30) * 1000.0;
+          /* extract gamma */
+          ret = extract_word_glo(n, 69, 10);
+          sign = extract_word_glo(n, 69 + 10, 1);
+          g_e.glo.gamma = sign ? -1.0 * ret * pow(2, -40) :
+                                        ret * pow(2, -40);
+          /* extract l and add B */
+          g_e.healthy |= extract_word_glo(n, 65, 1);
+
+          n->next_string_id = 4;
+          break;
+        case 4: /* string 4 */
+          /* extract tau */
+          ret = extract_word_glo(n, 59, 21);
+          sign = extract_word_glo(n, 59 + 21, 1);
+          g_e.glo.tau = sign ? -1.0 * ret * pow(2, -30) :
+                                      ret * pow(2, -30);
+          /* extract n */
+          g_e.sid.sat = extract_word_glo(n, 11, 5);
+          /* extract Ft (URA) */
+          g_e.ura = f_t[extract_word_glo(n, 30, 4)];
+          /*extract Nt*/
+          nt = (u16)extract_word_glo(n, 16, 11);
+
+          n->next_string_id = 5;
+          break;
+        case 5: /* string 5 */
+          /* extract N4 */
+          n4 = (u8)extract_word_glo(n, 32, 5);
+
+          n->next_string_id = 1;
+          done_flag = true;
+          break;
+        default:
+          break;
+      }
+    }
+    if (done_flag)
+    {
+      g_e.sid.code = CODE_GLO_L1CA;
+      /* convert GLO TOE to GPS TOE */
+      g_e.toe = glo_time2gps_time(nt, n4, hrs, min, sec);
+      g_e.valid = g_e.healthy; //NOTE: probably Valid needs to be defined by other way
+      memcpy(e, &g_e, sizeof(g_e));
+      done_flag = false;
+      return 1;
+    }
   }
 
   return 0;
 }
-#endif
+
