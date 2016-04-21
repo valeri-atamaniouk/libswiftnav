@@ -51,6 +51,7 @@ void nav_msg_init_glo(nav_msg_glo_t *n)
   /* Initialize the necessary parts of the nav message state structure. */
   memset(n, 0, sizeof(nav_msg_glo_t));
   n->next_string_id = 1; /* start parsing from string 1 */
+  n->state = SYNC_TM;
   done_flag = false;
 }
 
@@ -84,7 +85,70 @@ void nav_msg_init_glo(nav_msg_glo_t *n)
   return word;
 }
 
-/** The function deccodes a GLO navigation string
+/** Navigation message GLO decoding update.
+ * Called once per nav bit interval (10 ms).
+ * Performs the necessary steps to store the nav bits in buffer.
+ *
+ * \param n GLO Nav message decode state struct
+ * \param bit_val State of the nav bit to process, 0 or 1
+ *
+ * \return  1 if Glo nav string ready for decoding,
+ *         -1 otherwise.
+ */
+s8 nav_msg_update_glo(nav_msg_glo_t *n, bool bit_val)
+{
+  s8 ret = -1;
+
+  switch (n->state) {
+    case SYNC_TM: /* try to find time mark */
+      /* put incoming bit at the tail of the buffer */
+      n->string_bits[0] <<= 1; /* use one word of buffer for that purpose */
+      n->string_bits[0] |= bit_val;
+      /* collected bits match time mark? if not stay at this state */
+      if(extract_word_glo(n, 1, GLO_TM_LEN) == GLO_TM) {
+        /* time mark found, next time start collecting data bits */
+        n->meander_bits_cnt = 0;
+        n->manchester = 0;
+        n->state = GET_DATA_BIT;
+        n->string_bits[0] = 0;
+      }
+      break;
+    case GET_DATA_BIT: /* collect data bits of string */
+      n->meander_bits_cnt++;
+      n->manchester <<= 1;
+      n->manchester |= bit_val; /* store incoming bit */
+      /* did we take 2 bits of line code?
+       * if yes, remove meander and store bit in buffer,
+       * if no, stay at the state */
+      if (n->meander_bits_cnt == 2) {
+        /* shift whole buffer by 1 bit left */
+        for (u8 i = NAV_MSG_GLO_STRING_BITS_LEN - 1; i > 0; i--) {
+          u32 tmp = (n->string_bits[i] << 1) | ((n->string_bits[i-1] & (1<<31)) >> 31);
+          n->string_bits[i] = tmp;
+        }
+        n->string_bits[0] <<= 1;
+        /* store bit after meander removal to buffer */
+        n->string_bits[0] |= (n->manchester ^ 2) & 1;
+        n->current_head_bit_index++;
+        n->meander_bits_cnt = 0;
+        n->manchester = 0;
+        /* did we received all bits of a string?
+         * if yes, notify user and start searching time mark again*/
+        if (n->current_head_bit_index == 85) {
+          n->current_head_bit_index = 0;
+          n->state = SYNC_TM;
+          ret = 1;
+        }
+      }
+      break;
+    default:
+      nav_msg_init_glo(n); //TODO: probably not needed to initialize next_string_id
+      break;
+  }
+  return ret;
+}
+
+/** The function decodes a GLO navigation string
  * \param n Pointer to nav_msg_glo_t structure which contains GLO string
  * \param e Pointer to Ephemeris to store
  * \return 0 - decode not completed,
@@ -144,7 +208,7 @@ s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
           sign = extract_word_glo(n, 36 + 4, 1);
           g_e.glo.acc[1] = sign ? -1.0 * ret * pow(2, -30) * 1000.0 :
                                          ret * pow(2, -30) * 1000.0;
-          /* extract MSB of B */
+          /* extract MSB of B (if the bit is clear the SV is OK ) */
           g_e.healthy = extract_word_glo(n, 80, 1);
           /* extract P1 */
           g_e.fit_interval = p1[extract_word_glo(n, 77, 2)];
@@ -172,7 +236,7 @@ s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
           sign = extract_word_glo(n, 69 + 10, 1);
           g_e.glo.gamma = sign ? -1.0 * ret * pow(2, -40) :
                                         ret * pow(2, -40);
-          /* extract l and add B */
+          /* extract l, if the it is clear the SV is OK, so OR it with B */
           g_e.healthy |= extract_word_glo(n, 65, 1);
 
           n->next_string_id = 4;
@@ -208,6 +272,7 @@ s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
       g_e.sid.code = CODE_GLO_L1CA;
       /* convert GLO TOE to GPS TOE */
       g_e.toe = glo_time2gps_time(nt, n4, hrs, min, sec);
+      g_e.healthy ^= 1; /* invert healthy bit */
       g_e.valid = g_e.healthy; //NOTE: probably Valid needs to be defined by other way
       memcpy(e, &g_e, sizeof(g_e));
       done_flag = false;
