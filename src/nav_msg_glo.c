@@ -15,6 +15,7 @@
 #include <math.h>
 #include <libswiftnav/nav_msg_glo.h>
 #include <libswiftnav/time.h>
+#include <libswiftnav/logging.h>
 
 /* Word Ft (accuracy of measurements), refer to GLO ICD, Table 4.4 */
 const float f_t[] = { 1.0f, 2.0f, 2.5f, 4.0f, 5.0f, 7.0f, 10.0f, 12.0f, 14.0f,
@@ -22,6 +23,18 @@ const float f_t[] = { 1.0f, 2.0f, 2.5f, 4.0f, 5.0f, 7.0f, 10.0f, 12.0f, 14.0f,
 
 /* Word P1 (Time interval between adjacent values of tb, minutes), refer Table 4.3 */
 const u8 p1[] = { 0, 30, 45, 60 }; /* min */
+
+/* These bit masks (for data bits 9..85) correspond to table 4.13 of GLO ICD
+ * used in error correction algorithm */
+const u32 e_masks[7][3] = {
+    { 0xaaad5b00, 0x55555556, 0xaaaab  },
+    { 0x33366d00, 0x9999999b, 0xccccd  },
+    { 0xc3c78e00, 0xe1e1e1e3, 0x10f0f1 },
+    { 0xfc07f000, 0xfe01fe03, 0xff01   },
+    { 0xfff80000, 0xfffe0003, 0x1f0001 },
+    { 0,          0xfffffffc, 1        },
+    { 0,          0,          0x1ffffe },
+};
 
 /** Initialize the necessary parts of the nav message state structure.
  * \param n Pointer to GLO nav message structure to be initialized
@@ -31,6 +44,97 @@ void nav_msg_init_glo(nav_msg_glo_t *n)
   memset(n, 0, sizeof(nav_msg_glo_t));
   n->next_string_id = 1; /* start parsing from string 1 */
   n->state = SYNC_TM;
+}
+
+/* The algorithm based on
+ * https://graphics.stanford.edu/~seander/bithacks.html#ParityParallel
+ * \param in input data to calculate parity
+ * \param word if true, calculate parity for 32 bits otherwise for 8 bits
+ * \return parity bit */
+static bool parity(u32 in, bool word)
+{
+  u32 a = in;
+  if (word) {
+    a ^= a >> 16;
+    a ^= a >> 8;
+  } else
+    a &= 0x000000ff;
+  a ^= a >> 4;
+  a &= 0xf;
+  return (0x6996 >> a) & 1;
+}
+
+/** The function performs data verification and error correction
+ * in received GLO navigation string. Refer to GLO ICD, section 4.7
+ * \param n pointer to GLO nav message structure
+ * \return -1 -- received string is bad and should be dropped out,
+ *          0 -- received string is good
+ *          >0 -- number of bit in n->string_bits to be corrected (inverted)
+ *                range[9..85]*/
+s8 error_detection_glo(nav_msg_glo_t *n)
+{
+  u8 c = 0;
+  u32 data1, data2, data3;
+  bool p0, p1, p2, p3, beta, c_sum;
+  u8 bit_set = 0;
+  u8 k = 0;
+
+  /* calculate C1..7 */
+  for (u8 i = 0; i < 7; i++) {
+    /* extract corresponding check bit of Hamming code */
+    beta = extract_word_glo(n, i+1, 1);
+    /* extract data bits and apply mask */
+    data1 = extract_word_glo(n, 1, 32) & e_masks[i][0];
+    data2 = extract_word_glo(n, 33, 32) & e_masks[i][1];
+    data3 = extract_word_glo(n, 65, 32) & e_masks[i][2];
+    /* calculate parity for data[1..3] */
+    p1 = parity(data1, true);
+    p2 = parity(data2, true);
+    p3 = parity(data3, true);
+    bool p = beta ^ p1 ^ p2 ^ p3;
+    /* calculate common parity and set according C bit */
+    c |= p << i;
+    if (p) {
+      bit_set++; /* how many bits are set, used in error criteria */
+      k = i + 1; /* store number of most significant checksum not equal to 0,
+                    used in error criteria */
+    }
+  }
+
+  /* calculate C sum */
+  data1 = extract_word_glo(n, 1, 32) & 0xffffff00;
+  data2 = extract_word_glo(n, 33, 32);
+  data3 = extract_word_glo(n, 65, 32);
+  p1 = parity(data1, true);
+  p2 = parity(data2, true);
+  p3 = parity(data3, true);
+  p0 = parity(extract_word_glo(n, 1, 8), false);
+  c_sum = p0 ^ p1 ^ p2 ^ p3;
+
+  /* Now check C word to figure out is the string good, bad or
+   * correction is needed */
+  if ((!c_sum && !bit_set) || (1 == bit_set && c_sum)) /* case a) from ICD */
+
+    return 0; /* The string is good */
+
+  else if ((bit_set > 0 && !c_sum)
+           || (0 == bit_set && c_sum)) /* case c) from ICD */
+
+    return -1; /* multiple errors, bad string */
+
+  else if (bit_set > 1 && c_sum) { /* case b) from ICD */
+
+    u8 i_corr = (c & 0x7f) + 8 - k; /* define number of bit to be corrected */
+
+    if (i_corr > 85)
+      return -1; /* odd number of multiple errors, bad string */
+
+    return i_corr; /* return the bit to be corrected */
+
+  } else {/* should not be here */
+    log_error("GLO error correction: unexpected case");
+    return -1;
+  }
 }
 
 /** Extract a word of n_bits length (n_bits <= 32) at position bit_index into

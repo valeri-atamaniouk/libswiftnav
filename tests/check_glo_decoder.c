@@ -9,7 +9,7 @@
  * EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
  */
-#define DEBUG 1
+//#define DEBUG 1
 
 #include <stdio.h>
 #include <check.h>
@@ -168,7 +168,7 @@ START_TEST(test_nav_msg_update_glo)
     nav_msg_init_glo(&a);
     /* write test string to temporary buffer */
     memcpy(a.string_bits, strings_in[i], sizeof(n.string_bits));
-    /* transmit data bits, 85 bit */
+    /* transmit data bits, 85 bits */
     for (j = 85; j > 0; j--) {
       bool one_bit = extract_word_glo(&a, j, 1); /* get bit to be transmitted */
       manchester = (one_bit << 1 | one_bit) ^ 2; /* transform to line code */
@@ -188,6 +188,7 @@ START_TEST(test_nav_msg_update_glo)
 
       if (process_string_glo(&n, &e) == 1)
         e_out();
+
     }
     /* now pass time mark bit by bit to receiver (MSB first),
      * no line code needed */
@@ -199,6 +200,57 @@ START_TEST(test_nav_msg_update_glo)
 }
 END_TEST
 
+START_TEST(test_error_correction_glo)
+{
+  const struct {
+    u32 str_in[3]; /**< input string for test  */
+    s8 ret; /** result of the test */
+  } test_case[] = {
+    /* First, simply test one GLO nav message received from Novatel,
+     * we trust Novatel, so no errors must be */
+    { {0xc90cfb3e, 0x9743a301, 0x010749},  0}, /* case 0 */
+    { {0xdd39f5fc, 0x24542d0c, 0x021760},  0},
+    { {0x653bc7e9, 0x1e8ead92, 0x038006},  0},
+    { {0x60342dfc, 0x41000002, 0x0481c7},  0},
+    { {0x40000895, 0x00000003, 0x050d10},  0},
+    { {0x530a7ecf, 0x059c4415, 0x06b082},  0},
+    { {0xfd94beb6, 0x7a577e97, 0x070f46},  0},
+    { {0xba02de6f, 0x988e6814, 0x08b101},  0},
+    { {0x12064831, 0x87767698, 0x09e1a6},  0},
+    { {0xaf870be5, 0x54ef2617, 0x0ab286},  0},
+    { {0x0f06ba41, 0x9a3f2698, 0x0b8f7c},  0},
+    { {0x2f012204, 0xf0c3c81a, 0x0cb309},  0},
+    { {0x1c858601, 0x10c47e98, 0x0da065},  0},
+    { {0x5205980b, 0xf49abc1a, 0x0eb40e},  0},
+    { {0x15454437, 0x2504e698, 0x0f8c09},  0},
+    /* Second, take 1st string from other GLO nav message and introduce an error
+     * in data bits */
+    { {0xc90cfb81, 0x9743a301, 0x010748},  0}, /* case 15, no errors  */
+    { {0xc90cfb81, 0x9743a301, 0x110748}, 85},
+    { {0xc90cfb81, 0x1743a301, 0x010748}, 64},
+    { {0x490cfb81, 0x9743a301, 0x010748}, 32},
+    { {0xc90cfb81, 0x9743a300, 0x010748}, 33},
+    { {0xc90cfb81, 0x9743a301, 0x010749}, 65},
+    { {0xc90cfb81, 0x9743a301, 0x000748}, 81},
+    { {0xc90c3b81, 0x9743a301, 0x010748}, -1},
+    { {0xc90cfb81, 0x974fa301, 0x010748}, -1},
+    { {0xc90cfb81, 0x9743a301, 0x01074b}, -1},
+    { {0xc90cfb81, 0x9743a301, 0x010744}, -1},
+    { {0xc90cfb81, 0x9aaaa301, 0x010748}, -1},
+    { {0xc90cfb81, 0x9743a301, 0x010748},  0}, /* no errors here */
+  };
+
+  nav_msg_glo_t n;
+
+  for(u8 i = 0; i < sizeof(test_case) / sizeof(test_case[0]); i++) {
+    memcpy(n.string_bits, test_case[i].str_in, sizeof(n.string_bits));
+    s8 ret = error_detection_glo(&n);
+    fail_unless(test_case[i].ret == ret, "Case %u: ret = %d, expected %d",
+                i, ret, test_case[i].ret);
+  }
+}
+END_TEST
+
 Suite* glo_decoder_test_suite(void)
 {
   Suite *s = suite_create("GLO decoder");
@@ -206,6 +258,7 @@ Suite* glo_decoder_test_suite(void)
   tcase_add_test(tc_core, test_extract_glo_word);
   tcase_add_test(tc_core, test_process_string_glo);
   tcase_add_test(tc_core, test_nav_msg_update_glo);
+  tcase_add_test(tc_core, test_error_correction_glo);
   suite_add_tcase(s, tc_core);
 
   return s;

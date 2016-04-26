@@ -49,5 +49,6 @@ void nav_msg_init_glo(nav_msg_glo_t *n);
 s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e);
 u32 extract_word_glo(const nav_msg_glo_t *n, u16 bit_index, u8 n_bits);
 s8 nav_msg_update_glo(nav_msg_glo_t *n, bool bit_val);
+s8 error_detection_glo(nav_msg_glo_t *n);
 
 #endif /* LIBSWIFTNAV_NAV_MSG_GLO_H */
