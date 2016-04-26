@@ -16,6 +16,7 @@
 #include <libswiftnav/nav_msg_glo.h>
 #include <libswiftnav/time.h>
 #include <libswiftnav/logging.h>
+#include <libswiftnav/bits.h>
 
 /* Word Ft (accuracy of measurements), refer to GLO ICD, Table 4.4 */
 const float f_t[] = { 1.0f, 2.0f, 2.5f, 4.0f, 5.0f, 7.0f, 10.0f, 12.0f, 14.0f,
@@ -36,6 +37,8 @@ const u32 e_masks[7][3] = {
     { 0,          0,          0x1ffffe },
 };
 
+static u32 extract_word_glo(const nav_msg_glo_t *n, u16 bit_index, u8 n_bits);
+
 /** Initialize the necessary parts of the nav message state structure.
  * \param n Pointer to GLO nav message structure to be initialized
  */
@@ -44,24 +47,6 @@ void nav_msg_init_glo(nav_msg_glo_t *n)
   memset(n, 0, sizeof(nav_msg_glo_t));
   n->next_string_id = 1; /* start parsing from string 1 */
   n->state = SYNC_TM;
-}
-
-/* The algorithm based on
- * https://graphics.stanford.edu/~seander/bithacks.html#ParityParallel
- * \param in input data to calculate parity
- * \param word if true, calculate parity for 32 bits otherwise for 8 bits
- * \return parity bit */
-static bool parity(u32 in, bool word)
-{
-  u32 a = in;
-  if (word) {
-    a ^= a >> 16;
-    a ^= a >> 8;
-  } else
-    a &= 0x000000ff;
-  a ^= a >> 4;
-  a &= 0xf;
-  return (0x6996 >> a) & 1;
 }
 
 /** The function performs data verification and error correction
@@ -88,9 +73,9 @@ s8 error_detection_glo(nav_msg_glo_t *n)
     data2 = extract_word_glo(n, 33, 32) & e_masks[i][1];
     data3 = extract_word_glo(n, 65, 32) & e_masks[i][2];
     /* calculate parity for data[1..3] */
-    p1 = parity(data1, true);
-    p2 = parity(data2, true);
-    p3 = parity(data3, true);
+    p1 = parity(data1);
+    p2 = parity(data2);
+    p3 = parity(data3);
     bool p = beta ^ p1 ^ p2 ^ p3;
     /* calculate common parity and set according C bit */
     c |= p << i;
@@ -105,10 +90,10 @@ s8 error_detection_glo(nav_msg_glo_t *n)
   data1 = extract_word_glo(n, 1, 32) & 0xffffff00;
   data2 = extract_word_glo(n, 33, 32);
   data3 = extract_word_glo(n, 65, 32);
-  p1 = parity(data1, true);
-  p2 = parity(data2, true);
-  p3 = parity(data3, true);
-  p0 = parity(extract_word_glo(n, 1, 8), false);
+  p1 = parity(data1);
+  p2 = parity(data2);
+  p3 = parity(data3);
+  p0 = parity(extract_word_glo(n, 1, 8));
   c_sum = p0 ^ p1 ^ p2 ^ p3;
 
   /* Now check C word to figure out is the string good, bad or
@@ -144,7 +129,7 @@ s8 error_detection_glo(nav_msg_glo_t *n)
  * \param n_bits how many bits should be extracted [1..32]
  * \return word extracted from navigation string
  */
-u32 extract_word_glo(const nav_msg_glo_t *n, u16 bit_index, u8 n_bits)
+static u32 extract_word_glo(const nav_msg_glo_t *n, u16 bit_index, u8 n_bits)
 {
   assert(n_bits <= 32 && n_bits > 0);
   assert(bit_index <= 85 && bit_index > 0);
@@ -252,6 +237,7 @@ s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
   u8 sign;
   /* is the string we need? */
   if (n->next_string_id == m) {
+    n->decode_done = 0;
     switch (m) {
     case 1: /* string 1 */
       /* extract x */
@@ -342,7 +328,8 @@ s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
       /* extract N4 */
       n->n4 = (u8) extract_word_glo(n, 32, 5);
 
-      n->next_string_id = 0; /* all string parsed */
+      n->next_string_id = 1; /* start decode from 1st string next time */
+      n->decode_done = 1; /* all string parsed */
       break;
     default:
       break;
@@ -350,16 +337,30 @@ s8 process_string_glo(nav_msg_glo_t *n, ephemeris_t *e)
   }
   /* all needed strings decoded?
    * fill ephemeris structure if we was not able to do it before*/
-  if (n->next_string_id == 0) {
+  if (n->decode_done) {
     e->sid.code = CODE_GLO_L1CA;
     /* convert GLO TOE to GPS TOE */
     e->toe = glo_time2gps_time(n->nt, n->n4, n->hrs, n->min, n->sec);
     e->healthy ^= 1; /* invert healthy bit */
     e->valid = e->healthy; //NOTE: probably Valid needs to be defined by other way
-    n->next_string_id = 1; /* start from string 1 */
     return 1;
   }
 
 
   return 0;
+}
+
+/** This function just a wrapper for glo_time2gps_time
+ * \param n pointer to GLO nav message
+ * \return time of GLO referenced to the end of the 5th GLO nav string presented as
+ *         GPS time, -1 if ephemeris cannot be decoded */
+double nav_msg_get_tow_glo(const nav_msg_glo_t *n)
+{
+  /* + 10 sec for the end of 5th string */
+  if (!n->decode_done)
+    return -1;
+  else {
+    gps_time_t t = glo_time2gps_time(n->nt, n->n4, n->hrs, n->min, n->sec+10);
+    return t.tow;
+  }
 }

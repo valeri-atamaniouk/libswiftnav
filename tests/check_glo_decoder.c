@@ -15,7 +15,7 @@
 #include <check.h>
 #include <math.h>
 #include <string.h>
-#include <libswiftnav/nav_msg_glo.h>
+#include <nav_msg_glo.c>
 #include <libswiftnav/logging.h>
 
 nav_msg_glo_t n;
@@ -251,6 +251,22 @@ START_TEST(test_error_correction_glo)
 }
 END_TEST
 
+START_TEST(test_get_tow_glo)
+{
+  nav_msg_init_glo(&n);
+  memset(&e, 0, sizeof(e));
+  double t = nav_msg_get_tow_glo(&n);
+  fail_unless(t == -1, "t = %lf, expected %lf", t, -1);
+  for (u8 i = 1; i < sizeof(strings_in) / sizeof(strings_in[1]); i++) {
+    memcpy(n.string_bits, strings_in[i], sizeof(n.string_bits));
+    process_string_glo(&n, &e);
+  }
+
+  t = nav_msg_get_tow_glo(&n);
+  fail_unless(t == e.toe.tow+10, "t = %lf, expected %lf", t, e.toe.tow+10);
+}
+END_TEST
+
 Suite* glo_decoder_test_suite(void)
 {
   Suite *s = suite_create("GLO decoder");
@@ -259,6 +275,7 @@ Suite* glo_decoder_test_suite(void)
   tcase_add_test(tc_core, test_process_string_glo);
   tcase_add_test(tc_core, test_nav_msg_update_glo);
   tcase_add_test(tc_core, test_error_correction_glo);
+  tcase_add_test(tc_core, test_get_tow_glo);
   suite_add_tcase(s, tc_core);
 
   return s;
