@@ -306,6 +306,7 @@ void lock_detect_update(lock_detect_t *l, float I, float Q, float DT);
 void cn0_est_bl_init(cn0_est_state_t *s,
                      float bw, float cn0_0, float f_s, float f_i);
 float cn0_est_bl_update(cn0_est_state_t *s, float I, float Q);
+float cn0_est_bl_update_q(cn0_est_state_t *s, float I, float Q);
 void cn0_est_snv_init(cn0_est_state_t *s,
                       float cn0_0, float bw, float f_s, float f_i);
 float cn0_est_snv_update(cn0_est_state_t *s, float I, float Q);

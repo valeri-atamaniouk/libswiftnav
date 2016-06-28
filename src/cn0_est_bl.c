@@ -23,6 +23,29 @@
 #define CN0_BL_NSR_MIN_MULTIPLIER (1e-6f)
 /** Maximum supported NSR value (1/NSR_MIN_MULTIPLIER)*/
 #define CN0_BL_NSR_MIN            (1e6f)
+/** Maximum estimator output value */
+#define CN0_BL_DB_MAX             (100.f)
+/** Minimum estimator output value */
+#define CN0_BL_DB_MIN             (0.f)
+
+static float limit_cn0(float cn0)
+{
+  if (cn0 > CN0_BL_DB_MAX)
+    return CN0_BL_DB_MAX;
+  else if (cn0 < CN0_BL_DB_MIN)
+    return CN0_BL_DB_MIN;
+  else
+    return cn0;
+}
+
+static float compute_nsr(float P_s, float P_n)
+{
+  /* Ensure the NSR is within the limit */
+  if (P_s < P_n * CN0_BL_NSR_MIN_MULTIPLIER)
+    return CN0_BL_NSR_MIN;
+  else
+    return P_n / P_s;
+}
 
 /** Initialize the \f$ C / N_0 \f$ estimator state.
  *
@@ -37,6 +60,11 @@
  * \f[
  *    P_n(n) = (|Q(n)|-|Q(n-1)|)^2
  * \f]
+ * for original BL method.
+ * \f[
+ *    P_n(n) = (|I(n)|-|I(n-1)|)^2
+ * \f]
+ * for modified BL method.
  * \f[
  *    P_s(n) = \frac{1}{2}(I(n)^2 + I(n-1)^2)
  * \f]
@@ -48,6 +76,9 @@
  * \param f_i   Loop integration frequency in Hz.
  *
  * \return None
+ *
+ * \sa cn0_est_bl_update
+ * \sa cn0_est_bl_update_q
  */
 void cn0_est_bl_init(cn0_est_state_t *s,
                      float bw,
@@ -78,11 +109,8 @@ float cn0_est_bl_update(cn0_est_state_t *s, float I, float Q)
   /* Compute values for this iteration */
   float I_abs = fabsf(I);
   (void)Q;
-  // float Q_abs = fabsf(Q);
   float I_prev_abs = s->I_prev_abs;
-  // float Q_prev_abs = s->Q_prev_abs;
   s->I_prev_abs = I_abs;
-  // s->Q_prev_abs = Q_abs;
 
   if (I_prev_abs < 0.f) {
     /* This is the first iteration, just update the prev state. */
@@ -92,24 +120,50 @@ float cn0_est_bl_update(cn0_est_state_t *s, float I, float Q)
     float nsr;    /* Noise to signal ratio */
     float nsr_db; /* Noise to signal ratio in dB*/
 
-    P_n = I_abs - I_prev_abs;//  Q_abs - Q_prev_abs;
+    P_n = I_abs - I_prev_abs;
     P_n *= P_n;
-
     P_s = 0.5f * (I * I + I_prev_abs * I_prev_abs);
-
-    /* Ensure the NSR is within the limit */
-    if (P_s < P_n * CN0_BL_NSR_MIN_MULTIPLIER)
-      nsr = CN0_BL_NSR_MIN;
-    else
-      nsr = P_n / P_s;
-
+    nsr = compute_nsr(P_s, P_n);
     nsr_db = 10.f * log10f(nsr);
-    s->cn0 = s->log_bw - nsr_db;
-    if (s->cn0 > 59.f) {
-      s->cn0 = 59.f;
-    } else if (s->cn0 < 10.f) {
-      s->cn0 = 10.f;
-    }
+    s->cn0 = limit_cn0(s->log_bw - nsr_db);
+  }
+
+  return s->cn0;
+}
+
+/**
+ * Computes \f$ C / N_0 \f$ with Beaulieu's method.
+ *
+ * \param s Initialized estimator object.
+ * \param I In-phase signal component
+ * \param Q Quadrature phase signal component.
+ *
+ * \return Computed \f$ C / N_0 \f$ value
+ */
+float cn0_est_bl_update_q(cn0_est_state_t *s, float I, float Q)
+{
+  /* Compute values for this iteration */
+  float I_abs = fabsf(I);
+  float Q_abs = fabsf(Q);
+  float I_prev_abs = s->I_prev_abs;
+  float Q_prev_abs = s->Q_prev_abs;
+  s->I_prev_abs = I_abs;
+  s->Q_prev_abs = Q_abs;
+
+  if (I_prev_abs < 0.f) {
+    /* This is the first iteration, just update the prev state. */
+  } else {
+    float P_n;    /* Noise power */
+    float P_s;    /* Signal power */
+    float nsr;    /* Noise to signal ratio */
+    float nsr_db; /* Noise to signal ratio in dB*/
+
+    P_n = Q_abs - Q_prev_abs;
+    P_n *= P_n;
+    P_s = 0.5f * (I * I + I_prev_abs * I_prev_abs);
+    nsr = compute_nsr(P_s, P_n);
+    nsr_db = 10.f * log10f(nsr);
+    s->cn0 = limit_cn0(s->log_bw - nsr_db);
   }
 
   return s->cn0;
