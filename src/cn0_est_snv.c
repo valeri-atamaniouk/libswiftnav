@@ -20,9 +20,9 @@
  * \{ */
 
 /** Multiplier for checking out-of bounds NSR */
-#define CN0_SNV_NSR_MIN_MULTIPLIER (1e-6f)
+#define CN0_SNV_NSR_MIN_MULTIPLIER (1e-16f)
 /** Maximum supported NSR value (1/NSR_MIN_MULTIPLIER)*/
-#define CN0_SNV_NSR_MIN            (1e6f)
+#define CN0_SNV_NSR_MIN            (1e16f)
 
 /** Initialize the \f$ C / N_0 \f$ estimator state.
  *
@@ -46,6 +46,8 @@
  * \param cn0_0 The initial value of \f$ C / N_0 \f$ in dBHz.
  * \param f_s   Input sampling frequency in Hz.
  * \param f_i   Loop integration frequency in Hz.
+ * \param alpha IIR coefficient for averaging sum approximation. The coefficient
+ *              is related to moving average filter approximation.
  *
  * \return None
  */
@@ -53,15 +55,18 @@ void cn0_est_snv_init(cn0_est_state_t *s,
                       float bw,
                       float cn0_0,
                       float f_s,
-                      float f_i)
+                      float f_i,
+                      float alpha)
 {
   memset(s, 0, sizeof(*s));
 
   /* Normalize by sampling frequency and integration period */
   s->log_bw = 10.f*log10f(bw * f_i / f_s);
-  s->I_prev_abs = -1.f;
-  s->Q_prev_abs = -1.f;
-  s->cn0 = cn0_0;
+  s->alpha = alpha;
+  s->snv.I_sum = 0.f;
+  s->snv.P_tot = 0.f;
+  s->snv.cn0_db = cn0_0;
+  s->snv.cnt = 20;
 }
 
 /**
@@ -75,40 +80,40 @@ void cn0_est_snv_init(cn0_est_state_t *s,
  */
 float cn0_est_snv_update(cn0_est_state_t *s, float I, float Q)
 {
-  float I_abs = fabsf(I);
-  float Q_abs = fabsf(Q);
-  float I_prev_abs = s->I_prev_abs;
-  float Q_prev_abs = s->Q_prev_abs;
-  s->I_prev_abs = I_abs;
-  s->Q_prev_abs = Q_abs;
 
-  if (I_prev_abs < 0.f) {
-    /* This is the first iteration, just update the prev state. */
+  if (s->snv.cnt > 1) {
+    s->snv.I_sum += fabsf(I);
+    s->snv.P_tot += I * I + Q * Q;
+    s->snv.cnt--;
+  } else if (s->snv.cnt == 1) {
+    s->snv.cnt = 0;
+    s->snv.I_sum *= 0.05f;
+    s->snv.P_tot *= 0.05f;
   } else {
-    float P_tot;  /* Total power */
-    float P_n;    /* Noise power */
-    float P_s;    /* Signal power */
-    float nsr;    /* Noise to signal ratio */
-    float nsr_db; /* Noise to signal ratio in dB*/
+    float I_sum = s->snv.I_sum * (1 - s->alpha) + s->alpha * fabsf(I);
+    float P_tot = s->snv.P_tot * (1 - s->alpha) + s->alpha * (I * I + Q * Q);
 
-    P_s = 0.5f * (I_abs + I_prev_abs);
-    P_s *= P_s;
-    P_tot = 0.5f * (Q_prev_abs * Q_prev_abs + I_prev_abs * I_prev_abs +
-                    Q_abs * Q_abs + I_abs * I_abs);
-    P_n = P_tot - P_s;
+    s->snv.I_sum = I_sum;
+    s->snv.P_tot = P_tot;
+
+    float P_s = I_sum * I_sum;
+    float P_n = P_tot - P_s;
+
+    float nsr;
+    float nsr_db;
 
     /* Ensure the NSR is within the limit */
     if (P_s < P_n * CN0_SNV_NSR_MIN_MULTIPLIER)
       nsr = CN0_SNV_NSR_MIN;
     else
-      nsr = P_tot / P_s;
+      nsr = P_n / P_s;
 
     nsr_db = 10.f * log10f(nsr);
     /* Compute and store updated CN0 */
-    s->cn0 = s->log_bw - nsr_db;
+    s->snv.cn0_db = s->log_bw - nsr_db;
   }
 
-  return s->cn0;
+  return s->snv.cn0_db;
 }
 
 /** \} */

@@ -145,15 +145,34 @@ typedef struct {
   float Q; /**< Quadrature correlation. */
 } correlation_t;
 
+typedef struct {
+  float I_prev_abs; /**< Abs. value of the previous in-phase correlation. */
+  float Q_prev_abs; /**< Abs. value of the previous quadrature correlation. */
+  float nsr;        /**< Noise to signal ratio. */
+} cn0_est_bl_state_t;
+
+typedef struct {
+  float I_sum;    /**< Abs. value of the previous in-phase correlation. */
+  float P_tot;    /**< Abs. value of the previous quadrature correlation. */
+  float cn0_db;   /**< Signal to noise ratio in dB/Hz. */
+  u32   cnt;
+} cn0_est_snv_state_t;
+
 /** State structure for the \f$ C / N_0 \f$ estimator.
  * Should be initialized with cn0_est_init().
  */
 typedef struct {
   float log_bw;     /**< Noise bandwidth in dBHz. */
-  float I_prev_abs; /**< Abs. value of the previous in-phase correlation. */
-  float Q_prev_abs; /**< Abs. value of the previous quadrature correlation. */
-  float cn0;        /**< Signal to noise ratio in dB/Hz. */
+  float alpha;
+  union {
+    cn0_est_bl_state_t  bl;
+    cn0_est_snv_state_t snv;
+  };
 } cn0_est_state_t;
+
+typedef float cn0_est_update_fn(cn0_est_state_t *s, float I, float Q);
+typedef void cn0_est_init_fn(cn0_est_state_t *s, float bw, float cn0_0,
+                             float f_s, float f_i, float alpha);
 
 /** State structure for first order low-pass filter.
  *
@@ -303,13 +322,11 @@ void lock_detect_init(lock_detect_t *l, float k1, float k2, u16 lp, u16 lo);
 void lock_detect_reinit(lock_detect_t *l, float k1, float k2, u16 lp, u16 lo);
 void lock_detect_update(lock_detect_t *l, float I, float Q, float DT);
 
-void cn0_est_bl_init(cn0_est_state_t *s,
-                     float bw, float cn0_0, float f_s, float f_i);
-float cn0_est_bl_update(cn0_est_state_t *s, float I, float Q);
-float cn0_est_bl_update_q(cn0_est_state_t *s, float I, float Q);
-void cn0_est_snv_init(cn0_est_state_t *s,
-                      float cn0_0, float bw, float f_s, float f_i);
-float cn0_est_snv_update(cn0_est_state_t *s, float I, float Q);
+cn0_est_init_fn cn0_est_bl_init;
+cn0_est_update_fn cn0_est_bl_update;
+cn0_est_update_fn cn0_est_bl_update_q;
+cn0_est_init_fn cn0_est_snv_init;
+cn0_est_update_fn cn0_est_snv_update;
 
 void lp1_filter_init(lp1_filter_t *f, float initial,
                      float cutoff_freq, float loop_freq);

@@ -74,6 +74,8 @@ static float compute_nsr(float P_s, float P_n)
  * \param cn0_0 The initial value of \f$ C / N_0 \f$ in dBHz.
  * \param f_s   Input sampling frequency in Hz.
  * \param f_i   Loop integration frequency in Hz.
+ * \param alpha IIR coefficient for averaging sum approximation. The coefficient
+ *              is related to moving average filter approximation.
  *
  * \return None
  *
@@ -84,15 +86,16 @@ void cn0_est_bl_init(cn0_est_state_t *s,
                      float bw,
                      float cn0_0,
                      float f_s,
-                     float f_i)
+                     float f_i,
+                     float alpha)
 {
   memset(s, 0, sizeof(*s));
 
   /* Normalize by sampling frequency and integration period */
   s->log_bw = 10.f * log10f(bw * f_i / f_s);
-  s->I_prev_abs = -1.f;
-  s->Q_prev_abs = -1.f;
-  s->cn0 = cn0_0;
+  s->alpha = alpha;
+  s->bl.Q_prev_abs = -1.f;
+  s->bl.nsr = powf(10.f, 0.1f * (s->log_bw - cn0_0));
 }
 
 /**
@@ -109,8 +112,8 @@ float cn0_est_bl_update(cn0_est_state_t *s, float I, float Q)
   /* Compute values for this iteration */
   float I_abs = fabsf(I);
   (void)Q;
-  float I_prev_abs = s->I_prev_abs;
-  s->I_prev_abs = I_abs;
+  float I_prev_abs = s->bl.I_prev_abs;
+  s->bl.I_prev_abs = I_abs;
 
   if (I_prev_abs < 0.f) {
     /* This is the first iteration, just update the prev state. */
@@ -118,17 +121,17 @@ float cn0_est_bl_update(cn0_est_state_t *s, float I, float Q)
     float P_n;    /* Noise power */
     float P_s;    /* Signal power */
     float nsr;    /* Noise to signal ratio */
-    float nsr_db; /* Noise to signal ratio in dB*/
 
     P_n = I_abs - I_prev_abs;
     P_n *= P_n;
     P_s = 0.5f * (I * I + I_prev_abs * I_prev_abs);
     nsr = compute_nsr(P_s, P_n);
-    nsr_db = 10.f * log10f(nsr);
-    s->cn0 = limit_cn0(s->log_bw - nsr_db);
+    s->bl.nsr = s->bl.nsr * (1.f - s->alpha) + nsr * s->alpha;
   }
 
-  return s->cn0;
+  float res = limit_cn0(s->log_bw - 10.f * log10f(s->bl.nsr));
+
+  return res;
 }
 
 /**
@@ -145,10 +148,10 @@ float cn0_est_bl_update_q(cn0_est_state_t *s, float I, float Q)
   /* Compute values for this iteration */
   float I_abs = fabsf(I);
   float Q_abs = fabsf(Q);
-  float I_prev_abs = s->I_prev_abs;
-  float Q_prev_abs = s->Q_prev_abs;
-  s->I_prev_abs = I_abs;
-  s->Q_prev_abs = Q_abs;
+  float I_prev_abs = s->bl.I_prev_abs;
+  float Q_prev_abs = s->bl.Q_prev_abs;
+  s->bl.I_prev_abs = I_abs;
+  s->bl.Q_prev_abs = Q_abs;
 
   if (I_prev_abs < 0.f) {
     /* This is the first iteration, just update the prev state. */
@@ -156,17 +159,18 @@ float cn0_est_bl_update_q(cn0_est_state_t *s, float I, float Q)
     float P_n;    /* Noise power */
     float P_s;    /* Signal power */
     float nsr;    /* Noise to signal ratio */
-    float nsr_db; /* Noise to signal ratio in dB*/
 
     P_n = Q_abs - Q_prev_abs;
     P_n *= P_n;
     P_s = 0.5f * (I * I + I_prev_abs * I_prev_abs);
     nsr = compute_nsr(P_s, P_n);
-    nsr_db = 10.f * log10f(nsr);
-    s->cn0 = limit_cn0(s->log_bw - nsr_db);
+    s->bl.nsr = s->bl.nsr * (1.f - s->alpha) + nsr * s->alpha;
+
   }
 
-  return s->cn0;
+  float res = limit_cn0(s->log_bw - 10.f * log10f(s->bl.nsr));
+
+  return res;
 }
 
 /** \} */
